@@ -1,0 +1,185 @@
+---
+title: "wine"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+#loading required libraries and dataset
+```{r}
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(stringr)
+library(tidyr)
+library(httr)
+library(jsonlite)
+library(lubridate)
+library(car)
+library(effects)
+library(SnowballC)
+library(wordcloud)
+library(tree)
+library(caret)
+
+#reading the data
+wine <- read.csv("C:/Users/Administrator/Desktop/wine-reviews/winemag-data-130k-v2.csv")
+
+#summary of the entire data
+nrow(wine)
+colnames(wine)
+
+```
+
+#to understand the data.By looking into "Description", we find that it is a factor with 119,955 levels, which is 10,016 less than the number of total records within the dataset. This shows us that there are some repeated values.
+```{r}
+wine$description %>% 
+  glimpse()
+```
+
+#. Now we can proceed to get rid of the duplicates. We use a column named duplicate in order to tag those rows to delete, and drop the column once we are done.
+```{r}
+#duplicates
+wine <- wine %>% 
+  mutate(duplicate = duplicated(description)) %>% 
+  filter(duplicate==FALSE) %>% 
+  select(-duplicate) 
+
+
+```
+
+#create a table and a graph to analyze the distribution of reviews per country.
+```{r}
+wineCtry <- wine %>% 
+  group_by(country) %>% 
+  summarise(total = n()) %>% 
+  arrange(desc(total)) %>% 
+  mutate(totpcnt = round(total/ sum(total), digits=7), accum = cumsum(totpcnt))
+
+wineCtry
+```
+
+#getting top 10 countries and plotting them 
+```{r}
+wineCtry %>% head(10) %>%
+  ggplot( aes(x= factor(country, levels = wineCtry$country[order(desc(wineCtry$totpcnt))]), y = total)) +
+  geom_col() + 
+  geom_text(aes(label = sprintf("%.1f %%", 100*totpcnt), y = total + 1500)) +
+  labs(x="Country", y="Total Reviews", title="Distribution of Wine Reviews by Top 10 Countries")
+```
+
+
+#quality over quantity graph
+```{r}
+wineRating = wine %>% 
+ group_by(country) %>%
+ summarise_at(vars(points), funs(points = mean(., na.rm=T))) %>%
+ arrange(desc(points)) %>%
+ head(10)
+
+ggplot(data=wineRating, aes(x=reorder(country,-points), y= points)) + 
+  geom_bar(stat="identity", fill = "navy") + 
+  coord_cartesian(ylim=c(85,92)) + 
+  labs(x="Countries", y="Rating", title="Top 10 Countries by Average Rating")
+```
+
+
+```{r}
+wine %>%
+  filter(country=="England") %>%
+  summarize(count = n())
+```
+
+```{r}
+
+wine %>%
+ select(country, price) %>%
+ group_by(country) %>%
+ summarise(maxprice = max(price, na.rm = TRUE)) %>%
+ arrange(desc(maxprice)) %>%
+ head(10)
+```
+
+```{r}
+t.test(wine$price[wine$country=="US"],
+      wine$price[wine$country=="France"], paired=FALSE)
+```
+
+```{r}
+#Group by taster and sort by total reviews. Analyze reviews distribution
+wineTstr <- wine %>% group_by(taster_name) %>% summarise(total=n()) %>% 
+  arrange(desc(total)) %>% 
+  mutate(totpcnt = round(total/ sum(total), 7), accum = cumsum(totpcnt))
+
+```
+
+```{r}
+#Factor the taster name on desc order for organizing the bars on the next plot
+wineTstr$taster_name <- factor(wineTstr$taster_name, levels = wineTstr$taster_name[order(-wineTstr$total)])
+
+#print a plot with the tasters and number of reviews
+wineTstr %>% ggplot(aes(x= taster_name, y=total)) + geom_col() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  geom_text(aes(label = sprintf("%.f%%", 100*totpcnt), y = total+2000)) +
+  labs(x="Wine Taster Name", y="Total Wine Reviews", title="Total Reviews by Wine Taster")
+```
+
+```{r}
+temp <- wineTstr %>% filter(taster_name != "") %>% head(5)
+
+TopTstrCtry <- wine %>% 
+  filter(taster_name %in% temp$taster_name) %>%
+  group_by(taster_name, country) %>%
+  summarise(total = n())
+
+TopTstrCtry %>% 
+  ggplot( aes(x=factor(taster_name, levels = wineTstr$taster_name[order(-wineTstr$total)]), 
+              y=factor(country, levels= wineCtry$country[order(wineCtry$total)]), 
+              size = total)) +
+  geom_point() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(x="Taster", y="Country of Wine Reviewed",title="Countries Reviewed by Top 5 Tasters")
+```
+
+```{r}
+#remove anonymous wine tasters
+wineTstr2 = wineTstr %>% filter(wineTstr$taster_name!="") 
+
+#creating a sample data
+sample_d = wine %>%
+  filter(wine$country %in% head(wineCtry,4)$country & wine$taster_name %in% head(wineTstr2,4)$taster_name)
+
+dim(sample_d)
+colnames(sample_d)
+str(sample_d)
+
+```
+
+
+```{r}
+
+## 75% of the sample size
+smp_size <- floor(0.75 * nrow(sample_d))
+
+## converting the sample data to train and test data
+
+train_sam <- sample(seq_len(nrow(sample_d)), size = smp_size)
+
+train <- sample_d[train_sam, ]
+test <- sample_d[-train_sam, ]
+
+
+#creating a model using train dataset
+model <- lm(points ~ price,data = train)
+summary(model)
+
+#predicting the values using test dataset
+pred_val <- predict(model,test)
+
+#finding the error(RMSE)
+
+RMSE(pred = pred_val,obs = test$points,na.rm = T)
+
+
+```
